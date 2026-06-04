@@ -1,836 +1,279 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Life Decision Spinner 🎡</title>
-  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
-  <style>
-    /* ===== Custom Properties ===== */
-    :root {
-      --bg-primary: #f0f4ff;
-      --bg-secondary: #e8eeff;
-      --glass-bg: rgba(255, 255, 255, 0.25);
-      --glass-border: rgba(255, 255, 255, 0.4);
-      --glass-shadow: rgba(31, 38, 135, 0.15);
-      --text-primary: #1a1a2e;
-      --text-secondary: #4a4a6a;
-      --accent-1: #667eea;
-      --accent-2: #764ba2;
-      --accent-3: #f093fb;
-    }
+import { useState, useRef, useCallback, useEffect } from 'react';
+import confetti from 'canvas-confetti';
+import SpinWheel, { SpinWheelRef } from './components/SpinWheel';
+import OptionsManager from './components/OptionsManager';
+import ResultModal from './components/ResultModal';
+import HistoryPanel from './components/HistoryPanel';
+import { useSound } from './hooks/useSound';
+import { useLocalStorage } from './hooks/useLocalStorage';
 
-    .dark {
-      --bg-primary: #0f0f23;
-      --bg-secondary: #1a1a3e;
-      --glass-bg: rgba(255, 255, 255, 0.06);
-      --glass-border: rgba(255, 255, 255, 0.12);
-      --glass-shadow: rgba(0, 0, 0, 0.4);
-      --text-primary: #e8e8ff;
-      --text-secondary: #a0a0cc;
-    }
+/** Default options to start with */
+const DEFAULT_OPTIONS = [
+  'Study 📚',
+  'Sleep 😴',
+  'Play Games 🎮',
+  'Watch YouTube 📺',
+  'Text My Friend 💬',
+  'Go Outside 🌿',
+];
 
-    /* ===== Base Styles ===== */
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-      background: var(--bg-primary);
-      color: var(--text-primary);
-      min-height: 100vh;
-      transition: background 0.4s ease, color 0.4s ease;
-      overflow-x: hidden;
-    }
+interface HistoryItem {
+  result: string;
+  timestamp: number;
+}
 
-    /* ===== Animated Background ===== */
-    .animated-bg {
-      position: fixed;
-      top: 0; left: 0; width: 100%; height: 100%;
-      z-index: 0; overflow: hidden;
-    }
-    .animated-bg::before, .animated-bg::after {
-      content: ''; position: absolute; border-radius: 50%;
-      filter: blur(100px); opacity: 0.4;
-      animation: float 8s ease-in-out infinite;
-    }
-    .animated-bg::before {
-      width: 600px; height: 600px;
-      background: linear-gradient(135deg, var(--accent-1), var(--accent-3));
-      top: -200px; left: -100px; animation-delay: 0s;
-    }
-    .animated-bg::after {
-      width: 500px; height: 500px;
-      background: linear-gradient(135deg, var(--accent-2), var(--accent-1));
-      bottom: -150px; right: -100px; animation-delay: -4s;
-    }
-    .dark .animated-bg::before, .dark .animated-bg::after { opacity: 0.15; }
-    @keyframes float {
-      0%, 100% { transform: translate(0, 0) scale(1); }
-      33% { transform: translate(30px, -30px) scale(1.05); }
-      66% { transform: translate(-20px, 20px) scale(0.95); }
-    }
+/**
+ * Life Decision Spinner — Main Application
+ * A fun, modern single-page app that helps users make decisions
+ * by spinning a customizable wheel.
+ */
+export default function App() {
+  // ===== State =====
+  const [options, setOptions] = useLocalStorage<string[]>('spinner-options', DEFAULT_OPTIONS);
+  const [history, setHistory] = useLocalStorage<HistoryItem[]>('spinner-history', []);
+  const [darkMode, setDarkMode] = useLocalStorage<boolean>('spinner-dark', false);
+  const [isSpinning, setIsSpinning] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [showResult, setShowResult] = useState(false);
 
-    /* ===== Glassmorphism ===== */
-    .glass {
-      background: var(--glass-bg);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border: 1px solid var(--glass-border);
-      border-radius: 20px;
-      box-shadow: 0 8px 32px var(--glass-shadow);
-    }
-    .glass-strong {
-      background: var(--glass-bg);
-      backdrop-filter: blur(30px);
-      -webkit-backdrop-filter: blur(30px);
-      border: 1px solid var(--glass-border);
-      border-radius: 24px;
-      box-shadow: 0 12px 48px var(--glass-shadow);
-    }
+  // ===== Refs =====
+  const wheelRef = useRef<SpinWheelRef>(null);
 
-    /* ===== Spin Button ===== */
-    .spin-button {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white; border: none; border-radius: 50%;
-      width: 90px; height: 90px;
-      font-size: 1.1rem; font-weight: 800; cursor: pointer;
-      transition: all 0.3s ease;
-      box-shadow: 0 6px 30px rgba(102, 126, 234, 0.5);
-      letter-spacing: 1px; text-transform: uppercase;
-      position: relative; z-index: 10;
-    }
-    .spin-button:hover { transform: scale(1.1); box-shadow: 0 8px 40px rgba(102, 126, 234, 0.7); }
-    .spin-button:active { transform: scale(0.95); }
-    .spin-button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+  // ===== Sound Effects =====
+  const { playTick, playWin, playStart } = useSound();
 
-    /* ===== Wheel Pointer ===== */
-    .wheel-pointer {
-      width: 0; height: 0;
-      border-left: 16px solid transparent;
-      border-right: 16px solid transparent;
-      border-top: 30px solid #ff6b6b;
-      filter: drop-shadow(0 3px 6px rgba(0,0,0,0.3));
-      position: absolute; top: -8px; left: 50%;
-      transform: translateX(-50%); z-index: 5;
-    }
+  // ===== Dark Mode Class on HTML =====
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', darkMode);
+  }, [darkMode]);
 
-    /* ===== Modal ===== */
-    .modal-overlay {
-      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(8px);
-      display: none; align-items: center; justify-content: center;
-      z-index: 1000; animation: fadeIn 0.3s ease;
-    }
-    .modal-overlay.active { display: flex; }
-    .modal-content {
-      background: linear-gradient(135deg, rgba(255,255,255,0.9), rgba(255,255,255,0.7));
-      border-radius: 30px; padding: 48px; text-align: center;
-      max-width: 500px; width: 90%;
-      animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-      box-shadow: 0 20px 60px rgba(0,0,0,0.2); position: relative; overflow: hidden;
-    }
-    .dark .modal-content {
-      background: linear-gradient(135deg, rgba(30,30,60,0.95), rgba(20,20,50,0.9));
-    }
-    .modal-content::before {
-      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px;
-      background: linear-gradient(90deg, #667eea, #764ba2, #f093fb, #667eea);
-      background-size: 200% 100%; animation: shimmer 2s linear infinite;
-    }
-    @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-    @keyframes popIn { from { opacity: 0; transform: scale(0.5) translateY(20px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+  // ===== Handlers =====
 
-    /* ===== Scrollbar ===== */
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: rgba(102, 126, 234, 0.3); border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: rgba(102, 126, 234, 0.5); }
+  /** Handle spin start */
+  const handleSpinStart = useCallback(() => {
+    playStart();
+    setShowResult(false);
+    setResult(null);
+  }, [playStart]);
 
-    /* ===== Animations ===== */
-    @keyframes slideIn { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
-    @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-    @keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 20px rgba(102, 126, 234, 0.3); } 50% { box-shadow: 0 0 40px rgba(102, 126, 234, 0.6); } }
-    @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
-    @keyframes bounce-in { 0% { transform: scale(0); } 50% { transform: scale(1.2); } 70% { transform: scale(0.9); } 100% { transform: scale(1); } }
+  /** Handle spin tick (segment change) */
+  const handleTick = useCallback(() => {
+    playTick();
+  }, [playTick]);
 
-    /* ===== Toggle Switch ===== */
-    .toggle-switch {
-      width: 56px; height: 28px; background: #ccc; border-radius: 14px;
-      position: relative; cursor: pointer; transition: background 0.3s ease;
-    }
-    .toggle-switch.active { background: linear-gradient(135deg, #667eea, #764ba2); }
-    .toggle-switch::after {
-      content: ''; width: 22px; height: 22px; background: white;
-      border-radius: 50%; position: absolute; top: 3px; left: 3px;
-      transition: transform 0.3s ease; box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-    }
-    .toggle-switch.active::after { transform: translateX(28px); }
+  /** Handle spin end - show result */
+  const handleSpinEnd = useCallback(
+    (selectedOption: string) => {
+      setResult(selectedOption);
 
-    /* ===== Input Focus ===== */
-    input:focus { outline: none; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.3); }
+      // Add to history
+      setHistory((prev) => [
+        { result: selectedOption, timestamp: Date.now() },
+        ...prev.slice(0, 49), // Keep last 50
+      ]);
 
-    /* ===== Gradient Text ===== */
-    .gradient-text {
-      background: linear-gradient(135deg, #667eea, #764ba2, #f093fb);
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
+      // Short delay before showing modal for dramatic effect
+      setTimeout(() => {
+        setShowResult(true);
+        playWin();
 
-    /* ===== Option Item ===== */
-    .option-item { animation: slideIn 0.3s ease; }
-    .history-item { animation: slideUp 0.3s ease; }
+        // Fire confetti! 🎉
+        const duration = 2000;
+        const end = Date.now() + duration;
 
-    /* ===== Responsive ===== */
-    @media (max-width: 1024px) {
-      .main-grid { grid-template-columns: 1fr; }
-      .left-col, .right-col { width: 100%; order: 2; }
-      .center-col { order: 1; }
-      .left-col { order: 3; }
-    }
-    @media (max-width: 640px) {
-      .wheel-container { padding: 20px !important; }
-      .canvas-wrapper canvas { width: 260px !important; height: 260px !important; }
-    }
-  </style>
-</head>
-<body>
-  <div class="animated-bg"></div>
-  
-  <div class="relative z-10 min-h-screen flex flex-col">
-    <!-- Header -->
-    <header class="w-full px-4 sm:px-6 py-4 flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl sm:text-3xl font-extrabold gradient-text leading-tight">🎡 Life Decision Spinner</h1>
-        <p class="text-xs sm:text-sm mt-0.5" style="color: var(--text-secondary)">Let the wheel decide your fate!</p>
-      </div>
-      <div class="flex items-center gap-2">
-        <span class="text-sm" style="color: var(--text-secondary)" id="mode-icon">☀️</span>
-        <button class="toggle-switch" id="dark-toggle" aria-label="Toggle dark mode"></button>
-      </div>
-    </header>
+        const frame = () => {
+          confetti({
+            particleCount: 3,
+            angle: 60,
+            spread: 55,
+            origin: { x: 0, y: 0.7 },
+            colors: ['#667eea', '#764ba2', '#f093fb', '#FF6B6B', '#4ECDC4', '#FFEAA7'],
+          });
+          confetti({
+            particleCount: 3,
+            angle: 120,
+            spread: 55,
+            origin: { x: 1, y: 0.7 },
+            colors: ['#667eea', '#764ba2', '#f093fb', '#FF6B6B', '#4ECDC4', '#FFEAA7'],
+          });
 
-    <!-- Main Content -->
-    <main class="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 pb-8">
-      <div class="main-grid grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <!-- Left: Options Manager -->
-        <div class="left-col w-full lg:col-span-1 flex flex-col gap-6">
-          <div class="glass p-5 sm:p-6 w-full">
-            <h2 class="text-xl font-bold mb-4 gradient-text">🎯 Your Options</h2>
-            <div class="flex gap-2 mb-4">
-              <input type="text" id="option-input" placeholder="Add a decision..." 
-                     class="flex-1 px-4 py-3 rounded-xl border-none text-base transition-all"
-                     style="background: var(--glass-bg); color: var(--text-primary); border: 1px solid var(--glass-border);"
-                     maxlength="30">
-              <button id="add-btn" class="px-5 py-3 rounded-xl font-bold text-white transition-all hover:scale-105 active:scale-95 disabled:opacity-50 whitespace-nowrap"
-                      style="background: linear-gradient(135deg, #667eea, #764ba2);">+ Add</button>
-            </div>
-            <div class="flex gap-2 mb-4 flex-wrap">
-              <button id="lucky-btn" class="flex-1 min-w-[120px] px-4 py-2.5 rounded-xl font-semibold text-sm transition-all hover:scale-[1.02] active:scale-95 disabled:opacity-50"
-                      style="background: linear-gradient(135deg, rgba(240,147,251,0.2), rgba(102,126,234,0.2)); color: var(--text-primary); border: 1px solid rgba(240,147,251,0.3);">
-                🎲 Feeling Lucky?
-              </button>
-              <button id="clear-btn" class="px-4 py-2.5 rounded-xl font-semibold text-sm transition-all hover:scale-[1.02] active:scale-95 disabled:opacity-50"
-                      style="background: rgba(255,107,107,0.1); color: #ff6b6b; border: 1px solid rgba(255,107,107,0.3);">
-                🗑️ Clear All
-              </button>
-            </div>
-            <div id="options-list" class="space-y-2 max-h-[300px] overflow-y-auto pr-1"></div>
-            <p id="options-count" class="text-xs mt-3 text-center" style="color: var(--text-secondary)"></p>
+          if (Date.now() < end) {
+            requestAnimationFrame(frame);
+          }
+        };
+
+        frame();
+      }, 400);
+    },
+    [playWin, setHistory]
+  );
+
+  /** Close result modal */
+  const handleCloseResult = useCallback(() => {
+    setShowResult(false);
+  }, []);
+
+  /** Clear history */
+  const handleClearHistory = useCallback(() => {
+    setHistory([]);
+  }, [setHistory]);
+
+  return (
+    <div className="min-h-screen relative" style={{ background: 'var(--bg-primary)' }}>
+      {/* Animated background blobs */}
+      <div className="animated-bg" />
+
+      {/* Main content */}
+      <div className="relative z-10 min-h-screen flex flex-col">
+        {/* ===== Header ===== */}
+        <header className="w-full px-4 sm:px-6 py-4 flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold gradient-text leading-tight">
+              🎡 Life Decision Spinner
+            </h1>
+            <p className="text-xs sm:text-sm mt-0.5" style={{ color: 'var(--text-secondary)' }}>
+              Let the wheel decide your fate!
+            </p>
           </div>
-        </div>
 
-        <!-- Center: Wheel -->
-        <div class="center-col w-full lg:col-span-1 flex flex-col items-center gap-6">
-          <div class="glass-strong p-6 sm:p-8 flex flex-col items-center wheel-container">
-            <div class="relative flex items-center justify-center canvas-wrapper">
-              <div class="wheel-pointer"></div>
-              <canvas id="wheel-canvas" class="rounded-full"></canvas>
-              <button id="spin-btn" class="spin-button absolute">SPIN</button>
-            </div>
-            <div id="wheel-message" class="mt-5 text-center"></div>
-            <div id="last-result" class="mt-4 p-5 rounded-2xl text-center hidden bounce-in cursor-pointer hover:scale-105 transition-transform"
-                 style="background: linear-gradient(135deg, rgba(102,126,234,0.15), rgba(118,75,162,0.15)); border: 1px solid rgba(102,126,234,0.3);">
-              <p class="text-xs" style="color: var(--text-secondary)">Last result:</p>
-              <p id="last-result-text" class="text-lg font-bold gradient-text"></p>
-              <p class="text-xs mt-1" style="color: var(--text-secondary)">Tap to see details</p>
-            </div>
+          {/* Dark Mode Toggle */}
+          <div className="flex items-center gap-2">
+            <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+              {darkMode ? '🌙' : '☀️'}
+            </span>
+            <button
+              onClick={() => setDarkMode(!darkMode)}
+              className={`toggle-switch ${darkMode ? 'active' : ''}`}
+              aria-label="Toggle dark mode"
+            />
           </div>
-          <button id="mobile-spin" class="lg:hidden px-10 py-4 rounded-2xl font-bold text-lg text-white transition-all hover:scale-105 active:scale-95 disabled:opacity-50 disabled:hover:scale-100"
-                  style="background: linear-gradient(135deg, #667eea, #764ba2); box-shadow: 0 6px 30px rgba(102,126,234,0.4);">
-            🎯 SPIN THE WHEEL!
-          </button>
-        </div>
+        </header>
 
-        <!-- Right: History -->
-        <div class="right-col w-full lg:col-span-1 flex flex-col gap-6">
-          <div class="glass p-5 sm:p-6 w-full">
-            <div class="flex items-center justify-between mb-4">
-              <h2 class="text-xl font-bold gradient-text">📜 Decision History</h2>
-              <button id="clear-history" class="text-xs px-3 py-1.5 rounded-lg font-medium transition-all hover:scale-105 disabled:opacity-50"
-                      style="background: rgba(255,107,107,0.1); color: #ff6b6b; border: 1px solid rgba(255,107,107,0.2);">Clear</button>
-            </div>
-            <div id="history-list" class="space-y-2 max-h-[250px] overflow-y-auto pr-1"></div>
-            <div id="history-stats" class="mt-3 pt-3 border-t" style="border-color: var(--glass-border)"></div>
+        {/* ===== Main Layout ===== */}
+        <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 pb-8 flex flex-col lg:flex-row gap-6 items-start">
+          {/* Left Column: Options Manager */}
+          <div className="w-full lg:w-80 xl:w-96 order-2 lg:order-1 flex flex-col gap-6">
+            <OptionsManager
+              options={options}
+              setOptions={setOptions}
+              isSpinning={isSpinning}
+            />
           </div>
-          <div id="stats-card" class="glass p-5 hidden">
-            <h3 class="text-sm font-bold mb-3 gradient-text">⚡ Quick Stats</h3>
-            <div class="grid grid-cols-2 gap-3">
-              <div class="p-3 rounded-xl text-center stat-box" style="background: var(--glass-bg); border: 1px solid var(--glass-border)">
-                <p id="total-spins" class="text-2xl font-extrabold gradient-text">0</p>
-                <p class="text-xs" style="color: var(--text-secondary)">Total Spins</p>
+
+          {/* Center Column: Wheel */}
+          <div className="flex-1 order-1 lg:order-2 flex flex-col items-center gap-6 w-full">
+            {/* Wheel Container */}
+            <div className="glass-strong p-6 sm:p-8 flex flex-col items-center">
+              <SpinWheel
+                ref={wheelRef}
+                options={options}
+                onSpinEnd={handleSpinEnd}
+                onTick={handleTick}
+                onSpinStart={handleSpinStart}
+                isSpinning={isSpinning}
+                setIsSpinning={setIsSpinning}
+              />
+
+              {/* Instructions */}
+              <div className="mt-5 text-center">
+                {options.length < 2 ? (
+                  <p className="text-sm font-medium" style={{ color: '#ff6b6b' }}>
+                    ⚠️ Add at least 2 options to spin the wheel!
+                  </p>
+                ) : isSpinning ? (
+                  <p className="text-sm font-medium gradient-text animate-pulse">
+                    🎡 The wheel is spinning...
+                  </p>
+                ) : (
+                  <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                    Click <strong>SPIN</strong> or press the button to decide!
+                  </p>
+                )}
               </div>
-              <div class="p-3 rounded-xl text-center stat-box" style="background: var(--glass-bg); border: 1px solid var(--glass-border)">
-                <p id="unique-results" class="text-2xl font-extrabold gradient-text">0</p>
-                <p class="text-xs" style="color: var(--text-secondary)">Unique Results</p>
-              </div>
+
+              {/* Last result preview */}
+              {result && !showResult && !isSpinning && (
+                <div
+                  className="mt-4 px-5 py-3 rounded-2xl text-center bounce-in cursor-pointer hover:scale-105 transition-transform"
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(102,126,234,0.15), rgba(118,75,162,0.15))',
+                    border: '1px solid rgba(102,126,234,0.3)',
+                  }}
+                  onClick={() => setShowResult(true)}
+                >
+                  <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                    Last result:
+                  </p>
+                  <p className="text-lg font-bold gradient-text">{result}</p>
+                  <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+                    Tap to see details
+                  </p>
+                </div>
+              )}
             </div>
+
+            {/* Mobile: Spin button below wheel for easy thumb reach */}
+            <button
+              onClick={() => wheelRef.current?.spin()}
+              disabled={isSpinning || options.length < 2}
+              className="lg:hidden px-10 py-4 rounded-2xl font-bold text-lg text-white transition-all hover:scale-105 active:scale-95 disabled:opacity-50 disabled:hover:scale-100"
+              style={{
+                background: 'linear-gradient(135deg, #667eea, #764ba2)',
+                boxShadow: '0 6px 30px rgba(102,126,234,0.4)',
+              }}
+            >
+              {isSpinning ? '🎡 Spinning...' : '🎯 SPIN THE WHEEL!'}
+            </button>
           </div>
-        </div>
-      </div>
-    </main>
 
-    <!-- Footer -->
-    <footer class="w-full px-4 py-4 text-center" style="color: var(--text-secondary)">
-      <p class="text-xs">Made with ❤️ and a bit of chaos • <span class="gradient-text font-semibold">Life Decision Spinner</span></p>
-    </footer>
-  </div>
+          {/* Right Column: History */}
+          <div className="w-full lg:w-80 xl:w-96 order-3 flex flex-col gap-6">
+            <HistoryPanel history={history} onClear={handleClearHistory} />
 
-  <!-- Result Modal -->
-  <div id="modal" class="modal-overlay" onclick="closeModal()">
-    <div class="modal-content" onclick="event.stopPropagation()">
-      <div class="text-6xl mb-4 bounce-in">🎉</div>
-      <h2 class="text-2xl font-bold mb-2 gradient-text">The Wheel Has Spoken!</h2>
-      <div class="my-6 p-6 rounded-2xl" style="background: linear-gradient(135deg, rgba(102,126,234,0.1), rgba(118,75,162,0.1))">
-        <p id="modal-result" class="text-4xl font-extrabold gradient-text leading-tight"></p>
+            {/* Quick Stats Card */}
+            {history.length > 0 && (
+              <div className="glass p-5">
+                <h3 className="text-sm font-bold mb-3 gradient-text">⚡ Quick Stats</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div
+                    className="p-3 rounded-xl text-center"
+                    style={{ background: 'var(--glass-bg)', border: '1px solid var(--glass-border)' }}
+                  >
+                    <p className="text-2xl font-extrabold gradient-text">{history.length}</p>
+                    <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                      Total Spins
+                    </p>
+                  </div>
+                  <div
+                    className="p-3 rounded-xl text-center"
+                    style={{ background: 'var(--glass-bg)', border: '1px solid var(--glass-border)' }}
+                  >
+                    <p className="text-2xl font-extrabold gradient-text">
+                      {new Set(history.map((h) => h.result)).size}
+                    </p>
+                    <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                      Unique Results
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </main>
+
+        {/* ===== Footer ===== */}
+        <footer className="w-full px-4 py-4 text-center" style={{ color: 'var(--text-secondary)' }}>
+          <p className="text-xs">
+            Made with ❤️ and a bit of chaos •{' '}
+            <span className="gradient-text font-semibold">Life Decision Spinner</span>
+          </p>
+        </footer>
       </div>
-      <p id="modal-message" class="text-lg mb-8" style="color: var(--text-secondary)"></p>
-      <div class="flex gap-3 justify-center flex-wrap">
-        <button onclick="closeModal()" class="px-8 py-3 rounded-full font-bold text-white transition-all hover:scale-105 active:scale-95"
-                style="background: linear-gradient(135deg, #667eea, #764ba2)">Accept Fate ✨</button>
-        <button onclick="closeModal()" class="px-8 py-3 rounded-full font-bold transition-all hover:scale-105 active:scale-95"
-                style="background: rgba(102,126,234,0.1); color: var(--text-primary); border: 2px solid rgba(102,126,234,0.3)">Spin Again 🔄</button>
-      </div>
+
+      {/* ===== Result Modal ===== */}
+      {showResult && result && (
+        <ResultModal result={result} onClose={handleCloseResult} />
+      )}
     </div>
-  </div>
-
-  <script>
-    // ===== State =====
-    const state = {
-      options: ['Study 📚', 'Sleep 😴', 'Play Games 🎮', 'Watch YouTube 📺', 'Text My Friend 💬', 'Go Outside 🌿'],
-      history: JSON.parse(localStorage.getItem('spinner-history')) || [],
-      darkMode: JSON.parse(localStorage.getItem('spinner-dark')) || false,
-      isSpinning: false,
-      result: null
-    };
-
-    // ===== DOM Elements =====
-    const elements = {
-      canvas: document.getElementById('wheel-canvas'),
-      spinBtn: document.getElementById('spin-btn'),
-      mobileSpin: document.getElementById('mobile-spin'),
-      optionInput: document.getElementById('option-input'),
-      addBtn: document.getElementById('add-btn'),
-      luckyBtn: document.getElementById('lucky-btn'),
-      clearBtn: document.getElementById('clear-btn'),
-      clearHistory: document.getElementById('clear-history'),
-      optionsList: document.getElementById('options-list'),
-      optionsCount: document.getElementById('options-count'),
-      historyList: document.getElementById('history-list'),
-      historyStats: document.getElementById('history-stats'),
-      statsCard: document.getElementById('stats-card'),
-      wheelMessage: document.getElementById('wheel-message'),
-      lastResult: document.getElementById('last-result'),
-      lastResultText: document.getElementById('last-result-text'),
-      modal: document.getElementById('modal'),
-      modalResult: document.getElementById('modal-result'),
-      modalMessage: document.getElementById('modal-message'),
-      darkToggle: document.getElementById('dark-toggle'),
-      modeIcon: document.getElementById('mode-icon'),
-      totalSpins: document.getElementById('total-spins'),
-      uniqueResults: document.getElementById('unique-results')
-    };
-
-    // ===== Constants =====
-    const WHEEL_COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9', '#F8C471', '#82E0AA', '#F1948A', '#AED6F1', '#F9E79F', '#D2B4DE', '#A3E4D7', '#FAD7A0', '#A9CCE3', '#D5F5E3'];
-    
-    const RANDOM_OPTIONS = [
-      'Touch Grass 🌿', 'Become a Billionaire 💰', 'Learn Guitar 🎸', 'Adopt a Dragon 🐉',
-      'Conquer Mars 🚀', 'Take a Nap 💤', 'Invent a Time Machine ⏰', 'Start a Band 🎵',
-      'Write a Novel 📝', 'Learn to Cook 👨‍🍳', 'Build a Treehouse 🏡', 'Dance Like Nobody\'s Watching 💃',
-      'Sing in the Rain 🌧️', 'Meditate for 10 Minutes 🧘', 'Draw a Self-Portrait 🎨',
-      'Plan World Domination 🌍', 'Befriend a Pigeon 🐦', 'Start a Podcast 🎙️',
-      'Learn Origami 🦢', 'Challenge a Stranger to Chess ♟️'
-    ];
-
-    const FUNNY_MESSAGES = {
-      'study': '📚 Your future self thanks you.',
-      'sleep': '😴 Even the wheel knows you\'re tired.',
-      'nap': '💤 The universe wants you to rest.',
-      'play games': '🎮 One match won\'t hurt... probably.',
-      'game': '🎮 Just one more round, right?',
-      'youtube': '📺 Down the rabbit hole we go!',
-      'watch': '👀 Your watchlist isn\'t going to finish itself.',
-      'text': '💬 May the odds be ever in your favor.',
-      'friend': '👋 Socializing? In THIS economy?',
-      'outside': '🌿 Touch grass? Bold choice.',
-      'grass': '🌱 Nature is calling. Pick up!',
-      'eat': '🍕 The stomach has spoken!',
-      'cook': '👨‍🍳 Gordon Ramsay would be proud.',
-      'exercise': '💪 No pain, no gain. Mostly pain though.',
-      'workout': '🏋️ Your muscles are confused but intrigued.',
-      'read': '📖 A book? How very intellectual of you.',
-      'clean': '🧹 Adulting level: 100',
-      'shower': '🚿 Fresh start incoming!',
-      'billionaire': '💰 Step 1: Spin the wheel. Step 2: ???. Step 3: Profit.',
-      'guitar': '🎸 Anyway, here\'s Wonderwall.',
-      'dragon': '🐉 Have you checked the local shelter?',
-      'mars': '🚀 Elon who? You\'re the real deal.',
-      'code': '💻 Console.log(\'Let\'s go!\')',
-      'dance': '💃 Nobody\'s watching. Probably.',
-      'sing': '🎤 Your neighbors might disagree.',
-      'meditate': '🧘 Om... or should I say, \'ohm\'?',
-      'draw': '🎨 Picasso started somewhere too.',
-      'shop': '🛍️ Your wallet just flinched.',
-      'call': '📞 Remember when phones were for calling?'
-    };
-
-    const GENERIC_MESSAGES = [
-      '✨ The universe has decided!', '🎯 Destiny has chosen for you!',
-      '🔮 The wheel never lies... well, almost never.', '⭐ What are you waiting for? Go do it!',
-      '🎪 And the crowd goes wild!', '🌟 Written in the stars!',
-      '🎲 Fate rolls in your favor!', '🌈 The wheel has spoken and it is GLORIOUS!'
-    ];
-
-    // ===== Canvas & Wheel =====
-    let ctx, canvasSize = 340, rotation = 0, animFrame = 0, lastSegment = -1;
-
-    function getCanvasSize() {
-      const w = window.innerWidth;
-      if (w < 400) return 260;
-      if (w < 640) return 300;
-      return 340;
-    }
-
-    function initCanvas() {
-      ctx = elements.canvas.getContext('2d');
-      canvasSize = getCanvasSize();
-      elements.canvas.width = canvasSize;
-      elements.canvas.height = canvasSize;
-      elements.canvas.style.width = canvasSize + 'px';
-      elements.canvas.style.height = canvasSize + 'px';
-      drawWheel(0);
-    }
-
-    function drawWheel(rot) {
-      if (!ctx || state.options.length === 0) return;
-      const size = canvasSize, cx = size / 2, cy = size / 2, radius = size / 2 - 8;
-      const sliceAngle = (2 * Math.PI) / state.options.length;
-
-      ctx.clearRect(0, 0, size, size);
-
-      // Outer glow
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius + 4, 0, 2 * Math.PI);
-      ctx.fillStyle = 'rgba(102, 126, 234, 0.15)';
-      ctx.fill();
-
-      // Segments
-      state.options.forEach((opt, i) => {
-        const start = rot + i * sliceAngle, end = start + sliceAngle;
-        ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        ctx.arc(cx, cy, radius, start, end);
-        ctx.closePath();
-        ctx.fillStyle = WHEEL_COLORS[i % WHEEL_COLORS.length];
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        // Text
-        ctx.save();
-        ctx.translate(cx, cy);
-        ctx.rotate(start + sliceAngle / 2);
-        const textRadius = radius * 0.62;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        const fontSize = Math.min(14, (radius * 0.18 * 6) / Math.max(opt.length, 6));
-        ctx.font = `bold ${fontSize}px 'Segoe UI', system-ui, sans-serif`;
-        ctx.fillStyle = 'rgba(0,0,0,0.3)';
-        ctx.fillText(opt, textRadius + 1, 1, radius * 0.55);
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillText(opt, textRadius, 0, radius * 0.55);
-        ctx.restore();
-      });
-
-      // Center circle
-      const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, 30);
-      gradient.addColorStop(0, '#ffffff');
-      gradient.addColorStop(1, '#e8e8e8');
-      ctx.beginPath();
-      ctx.arc(cx, cy, 24, 0, 2 * Math.PI);
-      ctx.fillStyle = gradient;
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(102,126,234,0.5)';
-      ctx.lineWidth = 3;
-      ctx.stroke();
-
-      // Outer ring
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
-      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-      ctx.lineWidth = 3;
-      ctx.stroke();
-    }
-
-    function spinWheel() {
-      if (state.isSpinning || state.options.length < 2) return;
-      state.isSpinning = true;
-      updateUI();
-      playStartSound();
-
-      const totalRotation = Math.PI * 2 * (5 + Math.random() * 5) + Math.random() * Math.PI * 2;
-      const duration = 4000 + Math.random() * 2000;
-      const startTime = performance.now();
-      const startRotation = rotation;
-
-      const animate = (currentTime) => {
-        const elapsed = currentTime - startTime;
-        const progress = Math.min(elapsed / duration, 1);
-        const eased = 1 - Math.pow(1 - progress, 3);
-        rotation = startRotation + totalRotation * eased;
-        drawWheel(rotation);
-
-        const sliceAngle = (2 * Math.PI) / state.options.length;
-        const pointerAngle = -Math.PI / 2;
-        const normalized = ((pointerAngle - rotation) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
-        const currentSegment = Math.floor(normalized / sliceAngle);
-
-        if (currentSegment !== lastSegment && progress < 0.95) {
-          lastSegment = currentSegment;
-          playTickSound();
-        }
-
-        if (progress < 1) {
-          animFrame = requestAnimationFrame(animate);
-        } else {
-          state.isSpinning = false;
-          const finalNormalized = ((pointerAngle - rotation) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
-          const winnerIndex = Math.floor(finalNormalized / sliceAngle) % state.options.length;
-          const winner = state.options[winnerIndex];
-          state.result = winner;
-          state.history.unshift({ result: winner, timestamp: Date.now() });
-          if (state.history.length > 50) state.history.pop();
-          saveHistory();
-          updateUI();
-          setTimeout(() => showResult(winner), 400);
-        }
-      };
-      animFrame = requestAnimationFrame(animate);
-    }
-
-    // ===== Sound Effects =====
-    let audioCtx;
-    function getAudioCtx() {
-      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      return audioCtx;
-    }
-
-    function playTickSound() {
-      try {
-        const ctx = getAudioCtx();
-        const osc = ctx.createOscillator(), gain = ctx.createGain();
-        osc.connect(gain); gain.connect(ctx.destination);
-        osc.frequency.value = 800 + Math.random() * 400;
-        osc.type = 'sine';
-        gain.gain.setValueAtTime(0.08, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
-        osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.05);
-      } catch(e) {}
-    }
-
-    function playStartSound() {
-      try {
-        const ctx = getAudioCtx();
-        const osc = ctx.createOscillator(), gain = ctx.createGain();
-        osc.connect(gain); gain.connect(ctx.destination);
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(200, ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(800, ctx.currentTime + 0.3);
-        gain.gain.setValueAtTime(0.08, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
-        osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.3);
-      } catch(e) {}
-    }
-
-    function playWinSound() {
-      try {
-        const ctx = getAudioCtx();
-        [523.25, 659.25, 783.99, 1046.50].forEach((freq, i) => {
-          const osc = ctx.createOscillator(), gain = ctx.createGain();
-          osc.connect(gain); gain.connect(ctx.destination);
-          osc.frequency.value = freq; osc.type = 'sine';
-          const st = ctx.currentTime + i * 0.12;
-          gain.gain.setValueAtTime(0.15, st);
-          gain.gain.exponentialRampToValueAtTime(0.001, st + 0.4);
-          osc.start(st); osc.stop(st + 0.4);
-        });
-      } catch(e) {}
-    }
-
-    // ===== Result Modal =====
-    function getFunnyMessage(result) {
-      const lower = result.toLowerCase();
-      for (const [key, msg] of Object.entries(FUNNY_MESSAGES)) {
-        if (lower.includes(key)) return msg;
-      }
-      return GENERIC_MESSAGES[Math.floor(Math.random() * GENERIC_MESSAGES.length)];
-    }
-
-    function showResult(winner) {
-      elements.modalResult.textContent = winner;
-      elements.modalMessage.textContent = getFunnyMessage(winner);
-      elements.modal.classList.add('active');
-      playWinSound();
-      fireConfetti();
-      elements.lastResultText.textContent = winner;
-      elements.lastResult.classList.remove('hidden');
-    }
-
-    function closeModal() {
-      elements.modal.classList.remove('active');
-    }
-
-    function fireConfetti() {
-      const duration = 2000, end = Date.now() + duration;
-      const frame = () => {
-        confetti({ particleCount: 3, angle: 60, spread: 55, origin: { x: 0, y: 0.7 }, colors: ['#667eea', '#764ba2', '#f093fb', '#FF6B6B', '#4ECDC4', '#FFEAA7'] });
-        confetti({ particleCount: 3, angle: 120, spread: 55, origin: { x: 1, y: 0.7 }, colors: ['#667eea', '#764ba2', '#f093fb', '#FF6B6B', '#4ECDC4', '#FFEAA7'] });
-        if (Date.now() < end) requestAnimationFrame(frame);
-      };
-      frame();
-    }
-
-    // ===== Options Management =====
-    function addOption() {
-      const val = elements.optionInput.value.trim();
-      if (!val || state.options.includes(val)) {
-        elements.optionInput.classList.add('animate-shake');
-        setTimeout(() => elements.optionInput.classList.remove('animate-shake'), 400);
-        return;
-      }
-      state.options.push(val);
-      elements.optionInput.value = '';
-      elements.optionInput.focus();
-      saveOptions();
-      updateUI();
-    }
-
-    function addRandomOptions() {
-      const available = RANDOM_OPTIONS.filter(o => !state.options.includes(o));
-      if (available.length === 0) return;
-      const count = Math.min(3, available.length);
-      const shuffled = [...available].sort(() => Math.random() - 0.5);
-      state.options.push(...shuffled.slice(0, count));
-      saveOptions();
-      updateUI();
-    }
-
-    function deleteOption(index) {
-      state.options.splice(index, 1);
-      saveOptions();
-      updateUI();
-    }
-
-    function startEdit(index, element) {
-      const opt = state.options[index];
-      element.innerHTML = `<input type="text" value="${opt}" onblur="saveEdit(${index}, this)" onkeydown="handleEditKey(${index}, event, this)" autofocus maxlength="30" class="flex-1 px-2 py-1 rounded-lg text-sm bg-transparent border-none w-full" style="color: var(--text-primary); outline: 2px solid rgba(102,126,234,0.5);">`;
-      element.querySelector('input').focus();
-    }
-
-    function saveEdit(index, input) {
-      const val = input.value.trim();
-      if (val) state.options[index] = val;
-      saveOptions();
-      updateUI();
-    }
-
-    function handleEditKey(index, e, input) {
-      if (e.key === 'Enter') saveEdit(index, input);
-      if (e.key === 'Escape') updateUI();
-    }
-
-    function clearOptions() {
-      state.options = [];
-      saveOptions();
-      updateUI();
-    }
-
-    function clearHistory() {
-      state.history = [];
-      saveHistory();
-      updateUI();
-    }
-
-    // ===== localStorage =====
-    function saveOptions() { localStorage.setItem('spinner-options', JSON.stringify(state.options)); }
-    function saveHistory() { localStorage.setItem('spinner-history', JSON.stringify(state.history)); }
-
-    // ===== Dark Mode =====
-    function toggleDarkMode() {
-      state.darkMode = !state.darkMode;
-      document.documentElement.classList.toggle('dark', state.darkMode);
-      elements.modeIcon.textContent = state.darkMode ? '🌙' : '☀️';
-      localStorage.setItem('spinner-dark', JSON.stringify(state.darkMode));
-    }
-
-    // ===== UI Updates =====
-    function updateUI() {
-      // Wheel
-      drawWheel(rotation);
-
-      // Spin buttons
-      const canSpin = !state.isSpinning && state.options.length >= 2;
-      elements.spinBtn.disabled = !canSpin;
-      elements.mobileSpin.disabled = !canSpin;
-
-      // Options list
-      elements.optionsList.innerHTML = state.options.length === 0 ? `
-        <div class="text-center py-8" style="color: var(--text-secondary)">
-          <p class="text-4xl mb-2">🎡</p>
-          <p class="text-sm">Add at least 2 options to spin!</p>
-        </div>` :
-        state.options.map((opt, i) => `
-          <div class="option-item flex items-center gap-2 p-3 rounded-xl transition-all hover:scale-[1.01]" style="background: var(--glass-bg); border: 1px solid var(--glass-border);">
-            <div class="w-3 h-3 rounded-full flex-shrink-0" style="background: ${WHEEL_COLORS[i % WHEEL_COLORS.length]};"></div>
-            <span class="flex-1 text-sm font-medium truncate" style="color: var(--text-primary)">${escapeHtml(opt)}</span>
-            ${!state.isSpinning ? `<div class="flex gap-1 flex-shrink-0">
-              <button onclick="startEdit(${i}, this.parentElement.parentElement)" class="p-1.5 rounded-lg text-xs hover:bg-blue-500/20" title="Edit">✏️</button>
-              <button onclick="deleteOption(${i})" class="p-1.5 rounded-lg text-xs hover:bg-red-500/20" title="Delete">❌</button>
-            </div>` : ''}
-          </div>`).join('');
-
-      // Options count
-      elements.optionsCount.textContent = state.options.length > 0 ?
-        `${state.options.length} option${state.options.length !== 1 ? 's' : ''} on the wheel${state.options.length < 2 ? ' • Need at least 2 to spin!' : ''}` : '';
-
-      // History
-      const hasHistory = state.history.length > 0;
-      elements.clearHistory.style.display = hasHistory ? 'block' : 'none';
-      elements.historyList.innerHTML = hasHistory ?
-        state.history.map((h, i) => {
-          const date = new Date(h.timestamp);
-          const isToday = date.toDateString() === new Date().toDateString();
-          const time = isToday ? date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) :
-            date.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-          return `
-            <div class="history-item flex items-center justify-between p-3 rounded-xl" style="background: var(--glass-bg); border: 1px solid var(--glass-border); animation-delay: ${i * 0.05}s;">
-              <div class="flex items-center gap-2 min-w-0">
-                <span class="text-lg flex-shrink-0">${i === 0 ? '🏆' : '🎯'}</span>
-                <span class="font-semibold text-sm truncate" style="color: var(--text-primary)">${escapeHtml(h.result)}</span>
-              </div>
-              <span class="text-xs flex-shrink-0 ml-2" style="color: var(--text-secondary)">${time}</span>
-            </div>`;
-        }).join('') : `
-        <div class="text-center py-6" style="color: var(--text-secondary)">
-          <p class="text-3xl mb-2">🔮</p>
-          <p class="text-sm">No spins yet. Your destiny awaits!</p>
-        </div>`;
-
-      // History stats
-      if (hasHistory) {
-        const counts = {};
-        state.history.forEach(h => counts[h.result] = (counts[h.result] || 0) + 1);
-        let max = 0, mostPicked = '';
-        for (const [k, c] of Object.entries(counts)) {
-          if (c > max) { max = c; mostPicked = k; }
-        }
-        elements.historyStats.innerHTML = `
-          <p class="text-xs text-center" style="color: var(--text-secondary)">
-            Total spins: ${state.history.length} • Most picked: <span class="font-bold" style="color: var(--accent-1)">${escapeHtml(mostPicked)}</span>
-          </p>`;
-        elements.statsCard.classList.remove('hidden');
-        elements.totalSpins.textContent = state.history.length;
-        elements.uniqueResults.textContent = new Set(state.history.map(h => h.result)).size;
-      } else {
-        elements.historyStats.innerHTML = '';
-        elements.statsCard.classList.add('hidden');
-      }
-
-      // Wheel message
-      if (state.options.length < 2) {
-        elements.wheelMessage.innerHTML = '<p class="text-sm font-medium" style="color: #ff6b6b">⚠️ Add at least 2 options to spin the wheel!</p>';
-      } else if (state.isSpinning) {
-        elements.wheelMessage.innerHTML = '<p class="text-sm font-medium gradient-text animate-pulse">🎡 The wheel is spinning...</p>';
-      } else {
-        elements.wheelMessage.innerHTML = '<p class="text-sm" style="color: var(--text-secondary)">Click <strong>SPIN</strong> or press the button to decide!</p>';
-      }
-
-      // Buttons
-      elements.addBtn.disabled = state.isSpinning || !elements.optionInput.value.trim();
-      elements.luckyBtn.disabled = state.isSpinning;
-      elements.clearBtn.disabled = state.isSpinning;
-      elements.clearHistory.disabled = state.isSpinning;
-    }
-
-    // ===== Utility =====
-    function escapeHtml(text) {
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
-    }
-
-    // ===== Event Listeners =====
-    function initEvents() {
-      // Spin
-      elements.spinBtn.onclick = spinWheel;
-      elements.mobileSpin.onclick = spinWheel;
-
-      // Options
-      elements.optionInput.onkeydown = (e) => { if (e.key === 'Enter') addOption(); };
-      elements.addBtn.onclick = addOption;
-      elements.luckyBtn.onclick = addRandomOptions;
-      elements.clearBtn.onclick = clearOptions;
-      elements.clearHistory.onclick = clearHistory;
-
-      // Modal
-      elements.lastResult.onclick = () => { if (state.result) showResult(state.result); };
-      document.onkeydown = (e) => { if (e.key === 'Escape') closeModal(); };
-
-      // Dark mode
-      elements.darkToggle.onclick = toggleDarkMode;
-
-      // Resize
-      window.onresize = () => {
-        const newSize = getCanvasSize();
-        if (newSize !== canvasSize) {
-          canvasSize = newSize;
-          initCanvas();
-        }
-      };
-    }
-
-    // ===== Initialize =====
-    function init() {
-      // Load saved state
-      const savedOptions = localStorage.getItem('spinner-options');
-      if (savedOptions) state.options = JSON.parse(savedOptions);
-      const savedDark = localStorage.getItem('spinner-dark');
-      if (savedDark) { state.darkMode = JSON.parse(savedDark); }
-
-      // Apply dark mode
-      document.documentElement.classList.toggle('dark', state.darkMode);
-      elements.modeIcon.textContent = state.darkMode ? '🌙' : '☀️';
-      elements.darkToggle.classList.toggle('active', state.darkMode);
-
-      // Init
-      initCanvas();
-      initEvents();
-      updateUI();
-    }
-
-    // Start
-    init();
-  </script>
-</body>
-</html>
+  );
+}
